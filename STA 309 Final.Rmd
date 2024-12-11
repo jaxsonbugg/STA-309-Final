@@ -1,0 +1,405 @@
+---
+title: "STA 309 Final"
+author: "Jaxson Bugg"
+date: "2024-12-11"
+---
+
+```{r, include=FALSE}
+library(tidyverse)
+library(mplot)
+library(ggthemes)
+library(patchwork)
+library(caret)
+library(tidytext)
+library(ggwordcloud)
+library(rpart)
+library(rpart.plot)
+```
+
+# Part 1
+
+# Inputting, Cleaning, and Partitioning the Data
+
+```{r, show_col_types = FALSE}
+diabetes <- read_csv("diabetes_data.csv")
+
+diabetes <- diabetes %>%
+  mutate(hypertension = as.factor(hypertension), 
+         heart_disease = as.factor(heart_disease), 
+         diabetes = as.factor(diabetes), 
+         smoking_history = as.factor(smoking_history))
+
+set.seed(100)
+
+diabetesIndex <- createDataPartition(1:nrow(diabetes), p = 0.8)$Resample1
+
+diabetes_train <- filter(diabetes, row_number() %in% diabetesIndex)
+diabetes_test <- filter(diabetes, !row_number() %in% diabetesIndex)
+```
+
+# Creating the Full Models
+
+```{r}
+set.seed(100)
+
+cvmethod = trainControl(method="repeatedcv", number=5, repeats=10) 
+
+full.fit.log <- train(
+  diabetes ~ gender + age + hypertension + heart_disease +
+  smoking_history + bmi + HbA1c_level + blood_glucose_level,
+  data=diabetes_train, trControl=cvmethod, method="glm", family = "binomial")
+
+set.seed(100)
+
+full.fit.tree <- train(
+  diabetes ~ gender + age + hypertension + heart_disease + 
+  smoking_history + bmi + HbA1c_level + blood_glucose_level,
+  data = diabetes_train, method = "rpart", trControl = cvmethod, tuneLength = 10) 
+
+set.seed(100)
+
+full.fit.rf <- train(
+  diabetes ~ gender + age + hypertension + heart_disease + 
+  smoking_history + bmi + HbA1c_level + blood_glucose_level,
+  data = diabetes_train, method="rf", trControl=cvmethod, 
+  tuneGrid=expand.grid(mtry=1:8), importance=TRUE)
+```
+
+# Full Model Variable Analysis 
+
+#### Full Logistic Model Coefficients
+
+```{r}
+coefficients_log_full <- coef(full.fit.log$finalModel)
+
+coefficients_log_full_df <- data.frame(
+  Variable = names(coefficients_log_full),
+  Coefficients = coefficients_log_full
+)
+
+coefficients_log_full_df <- coefficients_log_full_df %>%
+  filter(Variable != "(Intercept)")
+
+Log_Full_Graph <- ggplot(data = coefficients_log_full_df) + 
+  geom_col(aes(x = abs(Coefficients), y = reorder(Variable, abs(Coefficients)))) + 
+  labs(
+    title = "Absolute Value of Coefficients - Full Logarithmic Model",
+    x = "Absolute Value of Coefficient",
+    y = "Variable"
+  ) +
+  theme_minimal()
+```
+
+#### Full Tree Model Importance
+
+```{r}
+importance_tree_full <- varImp(full.fit.tree)
+
+importance_tree_full_df <- data.frame(
+  Variable = rownames(importance_tree_full$importance),
+  Importance = importance_tree_full$importance[, 1]
+)
+
+Tree_Full_Graph <- ggplot(data = importance_tree_full_df) + 
+  geom_col(aes(x = Importance, y = reorder(Variable, Importance))) + 
+  labs(
+    title = "Variable Importance - Full Tree Model",
+    x = "Importance",
+    y = "Variable"
+  ) +
+  theme_minimal()
+```
+
+#### Full Random Forest Importance
+
+```{r}
+importance_rf_full <- varImp(full.fit.rf)
+
+importance_rf_full_df <- data.frame(
+  Variable = rownames(importance_rf_full$importance),
+  Importance = importance_rf_full$importance[, 1]
+)
+
+Forest_Full_Graph <- ggplot(data = importance_rf_full_df) + 
+  geom_col(aes(x = Importance, y = reorder(Variable, Importance))) + 
+  labs(
+    title = "Variable Importance - Full Random Forest Model",
+    x = "Importance",
+    y = "Variable"
+  ) +
+  theme_minimal()
+```
+
+## Graphing the Variable Analysis of Full Models
+
+```{r}
+Log_Full_Graph / Tree_Full_Graph / Forest_Full_Graph
+```
+
+The best way to determine the importance of a variable within the logarithmic model is to use the absolute value of the coefficient to determine the magnitude that the dependent variable changes when the independent variable increases by a factor of one. However, this does not account for the fact that increasing the HbA1c level of one unit, for example, will have a much greater effect than increasing the blood_glucose_level by one unit. Thus, it is difficult to interpret the coefficients solely based on this graph. Therefore, the best way to determine the variables that are most impactful is by using variable importance within the Tree and Random Forest Models. Based on this, it is clear that the HbA1c level and blood glucose level are the most important to diagnosing diabetes. Age and the presence of hypertension also appear to be important factors. Therefore, it is reasonable to create partial models with these four variables to see if they can more accurately predict the presence of diabetes. 
+
+# Creating the Partial Models
+
+```{r}
+set.seed(100)
+
+part.fit.log <- train(
+  diabetes ~ age + hypertension + HbA1c_level + blood_glucose_level,
+  data=diabetes_train, trControl=cvmethod, method="glm", family = "binomial")
+
+set.seed(100)
+
+part.fit.tree <- train(
+  diabetes ~ age + hypertension + HbA1c_level + blood_glucose_level,
+  data = diabetes_train, method = "rpart", trControl = cvmethod, tuneLength = 5) 
+
+set.seed(100)
+
+part.fit.rf <- train(
+  diabetes ~ age + hypertension + HbA1c_level + blood_glucose_level,
+  data = diabetes_train, method="rf", trControl=cvmethod, 
+  tuneGrid=expand.grid(mtry=1:4), importance=TRUE)
+```
+
+# Partial Model Variable Analysis 
+
+#### Partial Logarithmic Model Coefficients
+
+```{r}
+coefficients_log_part <- coef(part.fit.log$finalModel)
+
+coefficients_log_part_df <- data.frame(
+  Variable = names(coefficients_log_part),
+  Coefficients = coefficients_log_part
+)
+
+coefficients_log_part_df <- coefficients_log_part_df %>%
+  filter(Variable != "(Intercept)")
+
+Log_Part_Graph <- ggplot(data = coefficients_log_part_df) + 
+  geom_col(aes(x = abs(Coefficients), y = reorder(Variable, abs(Coefficients)))) + 
+  labs(
+    title = "Absolute Value of Coefficients - Part Logarithmic Model",
+    x = "Absolute Value of Coefficient",
+    y = "Variable"
+  ) +
+  theme_minimal()
+```
+
+#### Partial Tree Model Importance
+
+```{r}
+importance_tree_part <- varImp(part.fit.tree)
+
+importance_tree_part_df <- data.frame(
+  Variable = rownames(importance_tree_part$importance),
+  Importance = importance_tree_part$importance[, 1]
+)
+
+Tree_Part_Graph <- ggplot(data = importance_tree_part_df) + 
+  geom_col(aes(x = Importance, y = reorder(Variable, Importance))) + 
+  labs(
+    title = "Variable Importance - Part Tree Model",
+    x = "Importance",
+    y = "Variable"
+  ) +
+  theme_minimal()
+```
+
+#### Partial Random Forest Model Importance
+
+```{r}
+importance_rf_part <- varImp(part.fit.rf)
+
+importance_rf_part_df <- data.frame(
+  Variable = rownames(importance_rf_part$importance),
+  Importance = importance_rf_part$importance[, 1]
+)
+
+Forest_Part_Graph <- ggplot(data = importance_rf_part_df) + 
+  geom_col(aes(x = Importance, y = reorder(Variable, Importance))) + 
+  labs(
+    title = "Variable Importance - Part Random Forest Model",
+    x = "Importance",
+    y = "Variable"
+  ) +
+  theme_minimal()
+```
+
+## Graphing the Variable Analysis of Partial Models
+
+```{r}
+Log_Part_Graph / Tree_Part_Graph / Forest_Part_Graph
+```
+
+It is now even more evident that HbA1c level and blood glucose level are the dominating variables in regard to predicting diabetes. Hypertension got a variable importance of 0 in both the Tree model and the Random Forest model, showing that it is the least impactful of the four variables. However, it may still be useful to determining the presence of diabetes. 
+
+# Part 2
+
+# Testing the Accuracy of Models
+
+```{r}
+set.seed(100)
+
+diabetes_accuracy <- diabetes_test %>%
+  mutate(FullLogPred = predict(full.fit.log, newdata = diabetes_test),
+         FullTreePred = predict(full.fit.tree, newdata = diabetes_test),
+         FullRFPred = predict(full.fit.rf, newdata = diabetes_test),
+         PartLogPred = predict(part.fit.log, newdata = diabetes_test),
+         PartTreePred = predict(part.fit.tree, newdata = diabetes_test),
+         PartRFPred = predict(part.fit.rf, newdata = diabetes_test)) %>%
+  mutate(FullLogPred = as.numeric(predict(full.fit.log, newdata = diabetes_test))-1,
+         FullTreePred = as.numeric(predict(full.fit.tree, newdata = diabetes_test))-1,
+         FullRFPred = as.numeric(predict(full.fit.rf, newdata = diabetes_test))-1,
+         PartLogPred = as.numeric(predict(part.fit.log, newdata = diabetes_test))-1,
+         PartTreePred = as.numeric(predict(part.fit.tree, newdata = diabetes_test))-1,
+         PartRFPred = as.numeric(predict(part.fit.rf, newdata = diabetes_test))-1, 
+         diabetes = as.numeric(diabetes)-1) %>%
+  mutate(FullLogAccuracy = abs(FullLogPred - diabetes),
+         FullTreeAccuracy = abs(FullTreePred - diabetes),
+         FullRFAccuracy = abs(FullRFPred - diabetes),
+         PartLogAccuracy = abs(PartLogPred - diabetes),
+         PartTreeAccuracy = abs(PartTreePred - diabetes),
+         PartRFAccuracy = abs(PartRFPred - diabetes)) %>%
+  summarise(Full_Log = (1-mean(FullLogAccuracy)),
+            Full_Tree = (1-mean(FullTreeAccuracy)),
+            Full_RF = (1-mean(FullRFAccuracy)),
+            Part_Log = (1-mean(PartLogAccuracy)),
+            Part_Tree = (1-mean(PartTreeAccuracy)),
+            Part_RF = (1-mean(PartRFAccuracy))) %>%
+  pivot_longer(cols = 1:6, names_to = "Model", values_to = "Accuracy") %>%
+  arrange(desc(Accuracy))
+
+AccuracyDisplay <- ggplot(diabetes_accuracy) +
+  geom_col(aes(x = reorder(Model, -Accuracy), y = Accuracy), fill = "gray80", color = "black", show.legend = FALSE) +
+  labs(title = "Model Accuracy Comparison", x = "Model", y = "Accuracy") +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2), labels = c("0%", "20%", "40%", "60%", "80%", "100%")) +
+  scale_x_discrete(labels = c(
+    "Full_Log" = "Full Logistic",
+    "Full_Tree" = "Full Tree",
+    "Full_RF" = "Full RF",
+    "Part_Log" = "Partial Logistic",
+    "Part_Tree" = "Partial Tree",
+    "Part_RF" = "Partial RF"
+  )) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(hjust=0.5))
+
+diabetes_accuracy %>%
+  mutate(Accuracy = paste0(Accuracy * 100, '%'))
+         
+AccuracyDisplay
+```
+
+Accuracy was calculated by assigning values to the predictions for each model. If the model predicted diabetes/no diabetes in an individual correctly, it received a 1 for that individual. If it did not, it received a 0. An average was then taken across all individuals for each model to determine the accuracy of the model. 
+
+The models all have comparative levels of accuracy, as the range of accuracy from the most accurate to least accurate is just 3.5%. Regardless, it does appear that the full models are slightly better at predicting diabetes than the partial models. Additionally, the Random Forest and Tree models are generally better than the Logarithmic models. Overall, the Full Random Forest model has the most accurate model and thus is the best model to use to predict diabetes. 
+
+Accuracy appears to be a good way to measure how well a model performs. There is still a somewhat significant chance at receiving both Type 1 and Type 2 errors, both of which would be detrimental to an individual. A Type 1 error would diagnose a patient with diabetes, when they really do not have diabetes. This could lead to a rigid and expensive treatment of diabetes when it was not necessary. A Type 2 error is much more serious, as this would be a patient was not diagnosed with diabetes even though they have diabetes. Left untreated, diabetes can cause severe health issues and potentially death. Thus, a better metric for determining the best model may be one that calculates the rate of Type 2 errors. The model with the lowest rate of Type 2 errors would be the best model to use so as to reduce the chance of incorrectly letting an individual with diabetes walk away thinking they do not have it. 
+
+# Part 3
+
+The final infographic with the plots was created using Canva, with permission from Dr. Ashouri, and is on the Github repository. 
+
+# Creating the Plots for the Infographic
+
+#### Relating HbA1c Levels to Diabetes
+
+```{r}
+diabetes_adults <- diabetes %>%
+  filter(age > 17)
+
+ggplot(diabetes) +
+  geom_jitter(data = diabetes %>% filter(HbA1c_level < 5.7), aes(x = HbA1c_level, y = diabetes), position = position_jitter(width = 0.1, height = 0.15), color = "green4") +
+  geom_jitter(data = diabetes %>% filter(HbA1c_level > 5.7, HbA1c_level < 6.49), aes(x = HbA1c_level, y = diabetes), position = position_jitter(width = 0.1, height = 0.15), color = "yellow4") +
+  geom_jitter(data = diabetes %>% filter(HbA1c_level > 6.49), aes(x = HbA1c_level, y = diabetes), position = position_jitter(width = 0.1, height = 0.15), color = "red3") +
+  labs(x = "", y = "") +
+  annotate("text", x = 7.8, y = 1.5, label = "Diabetic\nA1C > 6.5", size = 7, color = "red3") +
+  annotate("text", x = 6.0, y = 1.5, label = "Pre\nDiabetic", size = 7, color = "yellow4") +
+  annotate("text", x = 4.3, y = 1.5, label = "Normal\nA1C < 5.7", size = 7, color = "green4") +
+  annotate("segment", x = 5.65, y = 2.25, xend = 9.2, yend = 2.25, color = "black", size = 1) +
+  annotate("segment", x = 5.65, y = 2.25, xend = 5.65, yend = 2.18, color = "black", size = 1) +
+  annotate("segment", x = 9.2, y = 2.25, xend = 9.2, yend = 2.18, color = "black", size = 1) +
+  annotate("segment", x = 7.425, y = 2.25, xend = 7.425, yend = 2.28, color = "black", size = 1) +
+  annotate("text", x = 7.425, y = 2.32, label = "Diagnosed Diabetic", size = 5.5, color = "black", fontface = "bold") +
+  annotate("segment", x = 3.3, y = 0.75, xend = 6.8, yend = 0.75, color = "black", size = 1) +
+  annotate("segment", x = 3.3, y = 0.75, xend = 3.3, yend = 0.82, color = "black", size = 1) +
+  annotate("segment", x = 6.8, y = 0.75, xend = 6.8, yend = 0.82, color = "black", size = 1) +
+  annotate("segment", x = 5.05, y = 0.75, xend = 5.05, yend = 0.72, color = "black", size = 1) +
+  annotate("text", x = 5.05, y = 0.68, label = "Not A Diagnosed Diabetic", size = 5.5, color = "black", fontface = "bold") +
+  scale_y_discrete(labels = c("1" = "Diabetes Diagnosis", "0" = "No Diabetes Diagnosis")) +
+  theme_classic() +
+  theme(axis.line = element_blank(), axis.ticks = element_blank(), axis.text = element_blank())
+```
+
+The green, yellow, and red ranges included in the graph are the ranges of A1C that the American Diabetes Association determines are plausible to diagnose or not diagnose someone with diabetes. This range is explained in the final infographic. 
+
+#### Relating Blood Glucose Level to Diabetes
+
+```{r}
+ggplot(diabetes) +
+  geom_jitter(data = diabetes %>% filter(blood_glucose_level < 140), aes(x = blood_glucose_level, y = diabetes), position = position_jitter(width = 6.8, height = 0.15), color = "green4") +
+  geom_jitter(data = diabetes %>% filter(blood_glucose_level > 140, blood_glucose_level < 200), aes(x = blood_glucose_level, y = diabetes), position = position_jitter(width = 6.8, height = 0.15), color = "yellow4") +
+  geom_jitter(data = diabetes %>% filter(blood_glucose_level > 200), aes(x = blood_glucose_level, y = diabetes), position = position_jitter(width = 6.8, height = 0.15), color = "red3") +
+  annotate("text", x = 260, y = 1.5, label = "Diabetic\nBGL > 200", size = 7, color = "red3") +
+  annotate("text", x = 175, y = 1.5, label = "Pre\nDiabetic", size = 7, color = "yellow4") +
+  annotate("text", x = 105, y = 1.5, label = "Normal\nBGL < 140", size = 7, color = "green4") +
+  annotate("segment", x = 117, y = 2.25, xend = 310, yend = 2.25, color = "black", size = 1) +
+  annotate("segment", x = 117, y = 2.25, xend = 117, yend = 2.18, color = "black", size = 1) +
+  annotate("segment", x = 310, y = 2.25, xend = 310, yend = 2.18, color = "black", size = 1) +
+  annotate("segment", x = 213.5, y = 2.25, xend = 213.5, yend = 2.28, color = "black", size = 1) +
+  annotate("text", x = 213.5, y = 2.32, label = "Diagnosed Diabetic", size = 5.5, color = "black", fontface = "bold") +
+  annotate("segment", x = 70, y = 0.75, xend = 170, yend = 0.75, color = "black", size = 1) +
+  annotate("segment", x = 70, y = 0.75, xend = 70, yend = 0.82, color = "black", size = 1) +
+  annotate("segment", x = 170, y = 0.75, xend = 170, yend = 0.82, color = "black", size = 1) +
+  annotate("segment", x = 121, y = 0.75, xend = 121, yend = 0.72, color = "black", size = 1) +
+  annotate("text", x = 121, y = 0.68, label = "Not A Diagnosed Diabetic", size = 5.5, color = "black", fontface = "bold") +
+  labs(x = "", y = "") +
+  scale_y_discrete(labels = c("1" = "   Yes ->", "0" = "   No ->")) +
+  theme_classic() +
+  theme(axis.line = element_blank(), axis.ticks = element_blank(), axis.text = element_blank())
+```
+
+The green, yellow, and red ranges included in the graph are the ranges of blood glucose level that the American Diabetes Association determines are plausible to diagnose or not diagnose someone with diabetes. This range is explained in the final infographic. 
+
+#### Relating Hypertension to Diabetes
+
+```{r}
+ggplot(diabetes, aes(x = hypertension, fill = diabetes)) +
+  geom_bar(position = "fill", color = "black") +
+  labs(x = "", y = "") +
+  theme_minimal() +
+  scale_x_discrete(labels = c("1" = "Hypertension", "0" = "No Hypertension")) +
+  theme(legend.position = "none", axis.line = element_blank(), 
+        axis.ticks = element_blank(), axis.text.y = element_blank(), 
+        axis.text.x = element_text(size = 25, color = "black", hjust = 0.5), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  scale_fill_manual(values = c("0" = "green4", "1" = "red3")) +
+  annotate("text", x = 1, y = .2, label = "~39% Diagnosed\nWith Diabetes", size = 5.5, color = "black", fontface = "bold") +
+  annotate("text", x = 2, y = .4, label = "~77% Diagnosed\nWith Diabetes", size = 5.5, color = "black", fontface = "bold")
+```
+
+#### Relating Age to Diabetes
+
+```{r}
+diabetes_agedata <- diabetes %>%
+  select(age, diabetes) %>%
+  mutate(age_range = case_when(
+    age < 50 ~ "Under 50",
+    age > 49 ~ "50 and Over"
+  )) %>%
+  mutate(age_range = factor(age_range, levels = rev(sort(unique(age_range)))))
+
+ggplot(diabetes_agedata, aes(x = age_range, fill = diabetes)) +
+  geom_bar(position = "fill", color = "black") +
+  labs(x = "", y = "") +
+  theme_minimal() +
+  theme(legend.position = "none", axis.line = element_blank(), 
+        axis.ticks = element_blank(), axis.text.y = element_blank(), 
+        axis.text.x = element_text(size = 25, color = "black", hjust = 0.5), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  scale_fill_manual(values = c("0" = "green4", "1" = "red3")) +
+  annotate("text", x = 2, y = .35, label = "~63% Diagnosed\nWith Diabetes", size = 5.5, color = "black", fontface = "bold") +
+  annotate("text", x = 1, y = .085, label = "~17% Diagnosed\nWith Diabetes", size = 5.5, color = "black", fontface = "bold")
+```
+
